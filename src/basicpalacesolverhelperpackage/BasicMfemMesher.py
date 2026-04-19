@@ -4,12 +4,19 @@
 #
 
 import gmsh
+import numpy as np
 
 class BasicMfemMesher:
 
     geometryObjectList = []
     internalGeometryObjectIndexCounter = 0
     _meshFieldList = []
+    _materialList = {}
+    _boundaryConditionList = {}
+    _portList = {}
+
+    _gmshGroupIdList = {}
+    _gmshGroupIdIndex = 100000
 
     def __init__(self):
         print("MFEM mesher created")
@@ -28,11 +35,23 @@ class BasicMfemMesher:
         return resultDimtagList
 
     def addStepfile(self, name, stepfile, priority=-1):
-        if priority == -1:
-            priority = self.internalGeometryObjectIndexCounter
-            self.internalGeometryObjectIndexCounter += 1
 
-        self.geometryObjectList.append({"name": name, "dimtags": self.importStepFileAndGetAllNewEntities(stepfile), "priority": priority, "type": "stepfile"})
+        isObjectAlreadyImported = False
+        for importedObject in self.geometryObjectList:
+            if "filepath" in importedObject.keys() and importedObject['filepath'] == stepfile:
+                isObjectAlreadyImported = True
+
+        if not isObjectAlreadyImported:
+            if priority == -1:
+                priority = self.internalGeometryObjectIndexCounter
+                self.internalGeometryObjectIndexCounter += 1
+
+            self.geometryObjectList.append({"name": name, "dimtags": self.importStepFileAndGetAllNewEntities(stepfile), "priority": priority, "type": "stepfile", "filepath": stepfile})
+
+            self._gmshGroupIdList[name] = self._gmshGroupIdIndex
+            self._gmshGroupIdIndex += 100000
+
+        return
 
     def addGmshObjectUsingDimtags(self, name, dimtags, priority=-1, type=""):
         if priority == -1:
@@ -40,6 +59,8 @@ class BasicMfemMesher:
             self.internalGeometryObjectIndexCounter += 1
 
         self.geometryObjectList.append({"name": name, "dimtags": dimtags, "priority": priority, "type": type})
+        self._gmshGroupIdList[name] = self._gmshGroupIdIndex
+        self._gmshGroupIdIndex += 100000
 
     def addGmshVolumeObject(self, name, gmshObjectTag, priority=-1):
         _, gmshObjectBoundary = gmsh.model.occ.getSurfaceLoops(gmshObjectTag)
@@ -206,6 +227,8 @@ class BasicMfemMesher:
         else:
             raise("Invalid input for object, it must be str or list of strings!")
 
+        self._gmshGroupIdList[groupName] = groupTag
+
         return groupTag
 
     def cutVolumesInsideModel(self):
@@ -369,3 +392,176 @@ class BasicMfemMesher:
         f_min = gmsh.model.mesh.field.add("Min")
         gmsh.model.mesh.field.setNumbers(f_min, "FieldsList", self._meshFieldList)
         gmsh.model.mesh.field.setAsBackgroundMesh(f_min)
+
+    def createGroupsForAllImportedObjects(self, nameList: list[str] = []):
+        for geometryObject in self.geometryObjectList:
+            geometryObjectName = geometryObject["name"]
+            if len(nameList) == 0 or (len(nameList) > 0 and geometryObjectName in nameList):
+                self.createGroup(geometryObjectName + "_2D", geometryObjectName, 2, groupTag=self.getGmshGroupId(geometryObjectName))
+                self.createGroup(geometryObjectName + "_3D", geometryObjectName, 3, groupTag=self.getGmshGroupId(geometryObjectName)+1)
+
+    def createGroupsForAllMaterials(self):
+        for materialName in self._materialList.keys():
+            gmshMaterialGroupName = "material_"+materialName
+            if gmshMaterialGroupName in self._gmshGroupIdList.keys():
+                self.createGroup(gmshMaterialGroupName + "_2D", self._materialList[materialName]["objects"], 2, groupTag=self.getGmshGroupId(gmshMaterialGroupName))
+                self.createGroup(gmshMaterialGroupName + "_3D", self._materialList[materialName]["objects"], 3, groupTag=self.getGmshGroupId(gmshMaterialGroupName)+1)
+
+    def createGroupsForAllBoundaryConditions(self):
+        for boundaryName in self._boundaryConditionList.keys():
+            gmshBoundaryGroupName = "boundary_"+boundaryName
+            if gmshBoundaryGroupName in self._gmshGroupIdList.keys():
+                self.createGroup(gmshBoundaryGroupName + "_2D", self._boundaryConditionList[boundaryName], 2, groupTag=self.getGmshGroupId(gmshBoundaryGroupName))
+
+    def addMaterial(self, name:str="", er:float|None=None, ur:float|None=None, conductivity:float|None=None, tand:float|None=None) -> None:
+        if not name in self._materialList.keys():
+            self._materialList[name] ={}
+            self._gmshGroupIdList["material_"+name] = self._gmshGroupIdIndex
+            self._gmshGroupIdIndex += 100000
+
+        if er is not None:
+            self._materialList[name]["er"] = er
+        if ur is not None:
+            self._materialList[name]["ur"] = ur
+        if conductivity is not None:
+            self._materialList[name]["sigma"] = conductivity
+        if tand is not None:
+            self._materialList[name]["tand"] = tand
+
+        return
+
+    def addObjectToMaterial(self, materialName: str, objectName: str) -> None:
+        if not "objects" in self._materialList[materialName].keys():
+            self._materialList[materialName]["objects"] = []
+
+        self._materialList[materialName]["objects"].append(objectName)
+        self._materialList[materialName]["objects"] = list(set(self._materialList[materialName]["objects"]))
+
+        return
+
+    def addObjectToBoundaryCondition(self, boundaryConditionName: str, objectName: str) -> None:
+        if not boundaryConditionName in self._boundaryConditionList.keys():
+            self._boundaryConditionList[boundaryConditionName] = []
+            self._gmshGroupIdList["boundary_"+boundaryConditionName] = self._gmshGroupIdIndex
+            self._gmshGroupIdIndex += 100000
+
+        self._boundaryConditionList[boundaryConditionName].append(objectName)
+        self._boundaryConditionList[boundaryConditionName] = list(set(self._boundaryConditionList[boundaryConditionName]))
+
+        return
+
+    def getMaterialAttributesAsDictForPalaceSimulationFile(self, materialName:str) -> dict:
+        materialAttributes = self._materialList[materialName]
+
+        materialObject = {}
+        if "er" in materialAttributes.keys():
+            materialObject["Permeability"] = materialAttributes["er"]
+        if "ur" in materialAttributes.keys():
+            materialObject["Permittivity"] = materialAttributes["ur"]
+        if "tand" in materialAttributes.keys():
+            materialObject["LossTan"] = materialAttributes["tand"]
+        if "sigma" in materialAttributes.keys():
+            materialObject["Conductivity"] = materialAttributes["sigma"]
+
+        materialObject["Attributes"] = [self._gmshGroupIdList["material_"+materialName]]
+
+        return materialObject
+
+    def getBoundaryConditionAttributesAsDictForPalaceSimulationFile(self, boundaryName:str) -> dict:
+        boundaryObject = {}
+        boundaryObject["Attributes"] = [self._gmshGroupIdList["boundary_"+boundaryName]]
+
+        return boundaryObject
+
+    def getMaterialNamesList(self):
+        return self._materialList.keys()
+
+    def getBoundaryConditionNamesList(self):
+        return self._boundaryConditionList.keys()
+
+    def getAllMaterialObjectForPalace(self):
+        palaceMaterialObject = []
+        for materialName in self.getMaterialNamesList():
+            materialObject = self.getMaterialAttributesAsDictForPalaceSimulationFile(materialName)
+            palaceMaterialObject.append(materialObject)
+
+        return palaceMaterialObject
+
+    def getAllBoundaryConditionsObjectForPalace(self):
+        palaceBoundaryConditionObject = {}
+        for boundaryName in self.getBoundaryConditionNamesList():
+            palaceBoundaryConditionObject[boundaryName] = self.getBoundaryConditionAttributesAsDictForPalaceSimulationFile(boundaryName)
+
+        return palaceBoundaryConditionObject
+
+    def getAllLumpedPortObjectForPalace(self):
+        palaceLumpedPortObject = []
+        for portObj in self._portList.values():
+            if portObj["type"] == "lumped":
+                palaceLumpedPortObject.append({
+                    "Index": portObj["index"],
+                    "Attributes": [self._gmshGroupIdList[portObj["name"]]],
+                    "Direction": portObj["direction"],
+                    "R": portObj["R"],
+                    "Excitation": True if portObj["excitation"] > 0 else False
+                })
+        return palaceLumpedPortObject
+
+    def getGmshGroupId(self, groupName):
+        return self._gmshGroupIdList[groupName]
+
+    def getGmshGroupIdList(self):
+        return self._gmshGroupIdList
+
+    def addPort(self, objectName="", direction="-Z", R=50, excitation=False, type="lumped", index=1):
+        self._portList[objectName] = {
+            "name": objectName,
+            "direction": direction,
+            "R": R,
+            "excitation": excitation,
+            "type": type,
+            "index": index
+        }
+        return
+
+    def gmshCreatePlate(self,
+                     origin: tuple[float, float, float],
+                     u: tuple[float, float, float],
+                     v: tuple[float, float, float],
+                     name: str | None = None):
+            """A generalized 2D rectangular plate in XYZ-space.
+
+            The plate is specified by an origin (o) in meters coordinate plus two vectors (u,v) in meters
+            that span two of the sides such that all points of the plate are defined by:
+                p1 = o
+                p2 = o+u
+                p3 = o+v
+                p4 = o+u+v
+            Args:
+                origin (tuple[float, float, float]): The origin of the plate in meters
+                u (tuple[float, float, float]): The u-axis of the plate
+                v (tuple[float, float, float]): The v-axis of the plate
+            """
+
+            origin = np.array(origin)
+            u = np.array(u)
+            v = np.array(v)
+
+            tagp1 = gmsh.model.occ.addPoint(*origin)
+            tagp2 = gmsh.model.occ.addPoint(*(origin + u))
+            tagp3 = gmsh.model.occ.addPoint(*(origin + v))
+            tagp4 = gmsh.model.occ.addPoint(*(origin + u + v))
+
+            tagl1 = gmsh.model.occ.addLine(tagp1, tagp2)
+            tagl2 = gmsh.model.occ.addLine(tagp2, tagp4)
+            tagl3 = gmsh.model.occ.addLine(tagp4, tagp3)
+            tagl4 = gmsh.model.occ.addLine(tagp3, tagp1)
+
+            tag_wire = gmsh.model.occ.addWire([tagl1, tagl2, tagl3, tagl4])
+
+            tags: list[int] = [gmsh.model.occ.addPlaneSurface([tag_wire, ]), ]
+
+            return tags
+
+
+

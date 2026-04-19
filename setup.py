@@ -12,7 +12,8 @@ setup(
     long_description="Basic object to manage geometries inside gmsh and create proper continous mesh to be usable in palace aws solver",
     long_description_content_type="text/markdown",
     url="https://github.com/LubomirJagos42/palace-aws-demo/tree/main/utils",
-    packages=find_packages(),
+    packages=find_packages(where=["src"]),
+    package_dir={"": "src"},
     classifiers=[
         "Programming Language :: Python :: 3",
         "License :: OSI Approved :: MIT License",
