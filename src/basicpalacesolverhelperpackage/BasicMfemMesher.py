@@ -451,21 +451,36 @@ class BasicMfemMesher:
         return
 
     def getMaterialAttributesAsDictForPalaceSimulationFile(self, materialName:str) -> dict:
-        materialAttributes = self._materialList[materialName]
+        """
+        Get material json for material if there are some objects assigned for this material. If no objects are assigned palace sovler will complain
+        about missing Attributes.
+        Args:
+            materialName: Existing material name
 
-        materialObject = {}
-        if "er" in materialAttributes.keys():
-            materialObject["Permeability"] = materialAttributes["er"]
-        if "ur" in materialAttributes.keys():
-            materialObject["Permittivity"] = materialAttributes["ur"]
-        if "tand" in materialAttributes.keys():
-            materialObject["LossTan"] = materialAttributes["tand"]
-        if "sigma" in materialAttributes.keys():
-            materialObject["Conductivity"] = materialAttributes["sigma"]
+        Returns:
+            - json material dict
+            - None if no objects assigned
+        """
 
-        materialObject["Attributes"] = [self._gmshGroupIdList["material_"+materialName]]
+        if len(self._materialList[materialName]["objects"]) > 0:
+            materialAttributes = self._materialList[materialName]
 
-        return materialObject
+            materialObject = {}
+            if "er" in materialAttributes.keys():
+                materialObject["Permeability"] = materialAttributes["er"]
+            if "ur" in materialAttributes.keys():
+                materialObject["Permittivity"] = materialAttributes["ur"]
+            if "tand" in materialAttributes.keys():
+                materialObject["LossTan"] = materialAttributes["tand"]
+            if "sigma" in materialAttributes.keys():
+                materialObject["Conductivity"] = materialAttributes["sigma"]
+
+            materialObject["Attributes"] = [self._gmshGroupIdList["material_"+materialName]]
+
+            return materialObject
+
+        else:
+            return None
 
     def getBoundaryConditionAttributesAsDictForPalaceSimulationFile(self, boundaryName:str) -> dict:
         boundaryObject = {}
@@ -483,7 +498,8 @@ class BasicMfemMesher:
         palaceMaterialObject = []
         for materialName in self.getMaterialNamesList():
             materialObject = self.getMaterialAttributesAsDictForPalaceSimulationFile(materialName)
-            palaceMaterialObject.append(materialObject)
+            if not materialObject is None:
+                palaceMaterialObject.append(materialObject)
 
         return palaceMaterialObject
 
@@ -506,6 +522,17 @@ class BasicMfemMesher:
                     "Excitation": True if portObj["excitation"] > 0 else False
                 })
         return palaceLumpedPortObject
+
+    def getAllSurfaceCurrentForPortObjectForPalace(self):
+        palaceSurfaceCurrentObject = []
+        for portObj in self._portList.values():
+            if portObj["type"] == "lumped" and portObj["excitation"] > 0:
+                palaceSurfaceCurrentObject.append({
+                    "Index": portObj["index"],
+                    "Attributes": [self._gmshGroupIdList[portObj["name"]]],
+                    "Direction": portObj["direction"]
+                })
+        return palaceSurfaceCurrentObject
 
     def getGmshGroupId(self, groupName):
         return self._gmshGroupIdList[groupName]
