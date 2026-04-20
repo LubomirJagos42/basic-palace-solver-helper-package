@@ -413,6 +413,28 @@ class BasicMfemMesher:
             if gmshBoundaryGroupName in self._gmshGroupIdList.keys():
                 self.createGroup(gmshBoundaryGroupName + "_2D", self._boundaryConditionList[boundaryName], 2, groupTag=self.getGmshGroupId(gmshBoundaryGroupName))
 
+    def createGroupsForObjectVolumesUsedInMaterials(self):
+        for materialName in self._materialList.keys():
+            if "objects" in self._materialList[materialName].keys() and len(self._materialList[materialName]["objects"]) > 0:
+                for objectNameAssignedToMaterial in self._materialList[materialName]["objects"]:
+                    self.createGroup(objectNameAssignedToMaterial+"_3D", objectNameAssignedToMaterial, 3, groupTag=self.getGmshGroupId(objectNameAssignedToMaterial)+1)
+
+    def createGroupsForObjectSurfacesUsedInBoundaryConditions(self):
+        for boundaryName in self._boundaryConditionList.keys():
+            for objectNameAssignedToBoundary in self._boundaryConditionList[boundaryName]:
+
+                # if object has no surfaces try to create boundary from its volume tags
+                surfaceTagList = [dimtag[1] for dimtag in self.getGeometryObject(objectNameAssignedToBoundary)["dimtags"] if dimtag[0] == 2]
+                if len(surfaceTagList) == 0:
+                    groupTag = gmsh.model.addPhysicalGroup(2, self.getBoundaryOuter(objectNameAssignedToBoundary), tag=self.getGmshGroupId(objectNameAssignedToBoundary), name=objectNameAssignedToBoundary + "_2D")
+                    self._gmshGroupIdList[objectNameAssignedToBoundary + "_2D"] = groupTag
+                else:
+                    self.createGroup(objectNameAssignedToBoundary + "_2D", objectNameAssignedToBoundary, 2, groupTag=self.getGmshGroupId(objectNameAssignedToBoundary))
+
+    def createGroupsForObjectSurfacesUsedInPort(self):
+        for portObjectName in self._portList.keys():
+            self.createGroup(portObjectName+"_2D", portObjectName, 2, groupTag=self.getGmshGroupId(portObjectName))
+
     def addMaterial(self, name:str="", er:float|None=None, ur:float|None=None, conductivity:float|None=None, tand:float|None=None) -> None:
         if not name in self._materialList.keys():
             self._materialList[name] ={}
@@ -462,7 +484,7 @@ class BasicMfemMesher:
             - None if no objects assigned
         """
 
-        if len(self._materialList[materialName]["objects"]) > 0:
+        if "objects" in self._materialList[materialName].keys() and len(self._materialList[materialName]["objects"]) > 0:
             materialAttributes = self._materialList[materialName]
 
             materialObject = {}
@@ -475,7 +497,9 @@ class BasicMfemMesher:
             if "sigma" in materialAttributes.keys():
                 materialObject["Conductivity"] = materialAttributes["sigma"]
 
-            materialObject["Attributes"] = [self._gmshGroupIdList["material_"+materialName]]
+            materialObject["Attributes"] = []
+            for objectNameAssignedToMaterial in self._materialList[materialName]["objects"]:
+                materialObject["Attributes"].append(self._gmshGroupIdList[objectNameAssignedToMaterial+"_3D"])
 
             return materialObject
 
@@ -484,7 +508,10 @@ class BasicMfemMesher:
 
     def getBoundaryConditionAttributesAsDictForPalaceSimulationFile(self, boundaryName:str) -> dict:
         boundaryObject = {}
-        boundaryObject["Attributes"] = [self._gmshGroupIdList["boundary_"+boundaryName]]
+
+        boundaryObject["Attributes"] = []
+        for objectNameAssignedToBoundary in self._boundaryConditionList[boundaryName]:
+            boundaryObject["Attributes"].append(self._gmshGroupIdList[objectNameAssignedToBoundary + "_2D"])
 
         return boundaryObject
 
@@ -590,5 +617,78 @@ class BasicMfemMesher:
 
             return tags
 
+    ##THIS WORKS JUST FOR BOX!!! just to get box boundaries, not for sphere :( :( :( left here just for inspiration
+    # def getBoundaryOuter(self, objectName, tol=1e-6) -> list[int]:
+    #     internalGeometry = self.getGeometryObject(objectName)
+    #     volumeTagList = [dimtag[1] for dimtag in internalGeometry["dimtags"] if dimtag[0] == 3]
+    #
+    #     outer = []
+    #     for volumeTag in volumeTagList:
+    #         # get bounding box
+    #         xmin, ymin, zmin, xmax, ymax, zmax = gmsh.model.getBoundingBox(
+    #             3, volumeTag
+    #         )
+    #
+    #         _, adjacent_surfaces = gmsh.model.getAdjacencies(3, volumeTag)
+    #
+    #         for surf_tag in adjacent_surfaces:
+    #             sxmin, symin, szmin, sxmax, symax, szmax = \
+    #                 gmsh.model.getBoundingBox(2, surf_tag)
+    #
+    #             # check if this surface lies on any face of the airbox bbox
+    #             on_xmin = abs(sxmin - xmin) < tol and abs(sxmax - xmin) < tol
+    #             on_xmax = abs(sxmin - xmax) < tol and abs(sxmax - xmax) < tol
+    #             on_ymin = abs(symin - ymin) < tol and abs(symax - ymin) < tol
+    #             on_ymax = abs(symin - ymax) < tol and abs(symax - ymax) < tol
+    #             on_zmin = abs(szmin - zmin) < tol and abs(szmax - zmin) < tol
+    #             on_zmax = abs(szmin - zmax) < tol and abs(szmax - zmax) < tol
+    #
+    #             if any([on_xmin, on_xmax, on_ymin, on_ymax, on_zmin, on_zmax]):
+    #                 outer.append(surf_tag)
+    #
+    #     return outer
 
+    #
+    # I made this with assistance of Claude AI as I was kind tired and have no energy to think so deep at night :(
+    #
+    def getBoundaryOuter(self, objectName) -> list[int]:
+        """
+        Get outermost surface of object specified by name. It takes object volume tags from dimtags and takes their surfaces using gmsh
+        .getAdjacencies(...) and looks how many boundary it touches, this should be working for boxes and sphere also.
+        Args:
+            objectName: str - specify object name in internal geometry manager
 
+        Returns:
+            surfaceTagList: list[int] - object surface tags which are object boundaries
+        """
+        internalGeometry = self.getGeometryObject(objectName)
+        volumeTagList = [
+            dimtag[1] for dimtag in internalGeometry["dimtags"]
+            if dimtag[0] == 3
+        ]
+        volume_set = set(volumeTagList)
+
+        seen = set()
+        outer = []
+
+        for volumeTag in volumeTagList:
+            _, adjacent_surfaces = gmsh.model.getAdjacencies(3, volumeTag)
+
+            for surf_tag in adjacent_surfaces:
+                if surf_tag in seen:
+                    continue
+                seen.add(surf_tag)
+
+                adj_vols, _ = gmsh.model.getAdjacencies(2, surf_tag)
+                adj_vol_set = set(adj_vols.tolist())
+
+                # surface is outer if every volume touching it
+                # belongs to our object (no external neighbours)
+                # and it is touched by exactly one volume
+                external_neighbours = adj_vol_set - volume_set
+                internal_neighbours = adj_vol_set & volume_set
+
+                if len(external_neighbours) == 0 and len(internal_neighbours) == 1:
+                    outer.append(surf_tag)
+
+        return outer
