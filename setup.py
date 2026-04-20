@@ -5,13 +5,13 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setup(
     name="basicpalacesolverhelperpackage",
-    version="0.0.2",
+    version="0.0.3",
     author="Lubomir Jagos",
     author_email="lubomir.jagos.42@gmail.com",
     description="Mesh creation and plot utilities for Palace EM solver or other FEM solver.",
     long_description="Basic object to manage geometries inside gmsh and create proper continous mesh to be usable in palace aws solver",
     long_description_content_type="text/markdown",
-    url="https://github.com/LubomirJagos42/palace-aws-demo/tree/main/utils",
+    url="https://github.com/LubomirJagos42/basic-palace-solver-helper-package",
     packages=find_packages(where=["src"]),
     package_dir={"": "src"},
     classifiers=[
