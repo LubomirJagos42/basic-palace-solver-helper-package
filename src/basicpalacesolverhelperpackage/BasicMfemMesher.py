@@ -74,6 +74,7 @@ class BasicMfemMesher:
         print(f"Importing {step_file}...")
 
         # Get entities before import
+        gmsh.model.occ.synchronize()
         entities_before = gmsh.model.getEntities()
 
         # Import
@@ -231,6 +232,19 @@ class BasicMfemMesher:
 
         return groupTag
 
+    def createGroupsForUntaggedSurfacesAndVolumes(self):
+        untaggedSurfaceTagList, untaggedVolumeTagList = self.validate_mesh_attributes()
+
+        groupName = "UNTAGGED_2D"
+        gmsh.model.addPhysicalGroup(2, untaggedSurfaceTagList, self._gmshGroupIdIndex, groupName)
+        self._gmshGroupIdList[groupName] = self._gmshGroupIdIndex
+        self._gmshGroupIdIndex += 100000
+
+        groupName = "UNTAGGED_3D"
+        gmsh.model.addPhysicalGroup(3, untaggedVolumeTagList, self._gmshGroupIdIndex, groupName)
+        self._gmshGroupIdList[groupName] = self._gmshGroupIdIndex
+        self._gmshGroupIdIndex += 100000
+
     def cutVolumesInsideModel(self):
         self.sortGeomtriesBasedOnPriority()
 
@@ -329,6 +343,8 @@ class BasicMfemMesher:
                     print(e)
                     pass
 
+    def addMeshFieldToList(self, fieldObj):
+        self._meshFieldList.append(fieldObj)
 
     def setSurfaceMeshSize(self, geometryObjectNameOrList: str | list[str], sizeMin: float=0.0, sizeMax: float=0.0, distanceMin: float=0.0, distanceMax: float=0.0):
         # Collect all surface tags
@@ -553,13 +569,23 @@ class BasicMfemMesher:
     def getAllSurfaceCurrentForPortObjectForPalace(self):
         palaceSurfaceCurrentObject = []
         for portObj in self._portList.values():
-            if portObj["type"] == "lumped" and portObj["excitation"] > 0:
+            if portObj["type"] == "lumped":
                 palaceSurfaceCurrentObject.append({
                     "Index": portObj["index"],
                     "Attributes": [self._gmshGroupIdList[portObj["name"]]],
                     "Direction": portObj["direction"]
                 })
         return palaceSurfaceCurrentObject
+
+    def getAllTerminalForPortObjectForPalace(self):
+        palaceTerminalObject = []
+        for portObj in self._portList.values():
+            if portObj["type"] == "lumped":
+                palaceTerminalObject.append({
+                    "Index": portObj["index"],
+                    "Attributes": [self._gmshGroupIdList[portObj["name"]]]
+                })
+        return palaceTerminalObject
 
     def getGmshGroupId(self, groupName):
         return self._gmshGroupIdList[groupName]
@@ -692,3 +718,69 @@ class BasicMfemMesher:
                     outer.append(surf_tag)
 
         return outer
+
+
+    def validate_mesh_attributes(self):
+        """Check for surfaces missing physical group assignment."""
+
+        # get all surface tags in the mesh
+        all_surfaces = set(
+            tag for dim, tag in gmsh.model.getEntities(2)
+        )
+
+        # get all surfaces that are in a physical group
+        tagged_surfaces = set()
+        for dim, phys_tag in gmsh.model.getPhysicalGroups(dim=2):
+            surfaces = gmsh.model.getEntitiesForPhysicalGroup(dim, phys_tag)
+            tagged_surfaces.update(surfaces)
+
+        # find untagged surfaces
+        untagged = all_surfaces - tagged_surfaces
+
+        if untagged:
+            print(f"WARNING: {len(untagged)} surfaces have no physical group!")
+            print(f"Untagged surface tags: {sorted(untagged)}")
+            for s in untagged:
+                bb = gmsh.model.getBoundingBox(2, s)
+                print(f"  surface {s}: bbox {bb}")
+        else:
+            print("OK: all surfaces are in a physical group")
+
+        # also check volumes
+        all_volumes = set(tag for dim, tag in gmsh.model.getEntities(3))
+        tagged_volumes = set()
+        for dim, phys_tag in gmsh.model.getPhysicalGroups(dim=3):
+            vols = gmsh.model.getEntitiesForPhysicalGroup(dim, phys_tag)
+            tagged_volumes.update(vols)
+
+        untagged_vols = all_volumes - tagged_volumes
+        if untagged_vols:
+            print(f"WARNING: {len(untagged_vols)} volumes have no physical group!")
+            print(f"Untagged volume tags: {sorted(untagged_vols)}")
+        else:
+            print("OK: all volumes are in a physical group")
+
+        return list(untagged), list(untagged_vols)
+
+    def removeDuplicateTagsInGeometryObjects(self):
+        """
+        This goes from high priority objects to lower and removes common tags between them from lower priority, this method
+        shouldn't exist if fragmentation method work right, but for now let's say it's easies sanitization to make model
+        working.
+        Returns:
+        """
+
+        self.sortGeomtriesBasedOnPriority()
+        for k in range(len(self.geometryObjectList)-1):
+            for m in range(k+1, len(self.geometryObjectList)):
+                #remove all dimtags from higher priority object in lower priority object
+                for dimtagToRemove in self.geometryObjectList[k]["dimtags"]:
+                    #supress error when dimtag not exists in lower priority object
+                    try:
+                        self.geometryObjectList[m]["dimtags"].remove(dimtagToRemove)
+                    except:
+                        pass
+
+        return
+
+
