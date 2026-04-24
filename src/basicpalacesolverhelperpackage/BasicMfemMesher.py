@@ -14,6 +14,7 @@ class BasicMfemMesher:
     _materialList = {}
     _boundaryConditionList = {}
     _portList = {}
+    _lumpedPartList = {}
 
     _gmshGroupIdList = {}
     _gmshGroupIdIndex = 100000
@@ -34,6 +35,9 @@ class BasicMfemMesher:
                 resultDimtagList.append(objDimtag)
 
         return resultDimtagList
+
+    def setGmshGroupIdIncrement(self, incrementValue:int) -> None:
+        self._gmshGroupIdIndexIncrement = incrementValue
 
     def addStepfile(self, name, stepfile, priority=-1):
 
@@ -504,9 +508,22 @@ class BasicMfemMesher:
                 else:
                     self.createGroup(objectNameAssignedToBoundary + "_2D", objectNameAssignedToBoundary, 2, groupTag=self.getGmshGroupId(objectNameAssignedToBoundary))
 
+        for boundaryName in self._lumpedPartList.keys():
+            for objectNameAssignedToBoundary in self._lumpedPartList[boundaryName]["objects"]:
+
+                # if object has no surfaces try to create boundary from its volume tags
+                surfaceTagList = [dimtag[1] for dimtag in self.getGeometryObject(objectNameAssignedToBoundary)["dimtags"] if dimtag[0] == 2]
+                if len(surfaceTagList) == 0:
+                    groupTag = gmsh.model.addPhysicalGroup(2, self.getBoundaryOuter(objectNameAssignedToBoundary), tag=self.getGmshGroupId(objectNameAssignedToBoundary), name=objectNameAssignedToBoundary + "_2D")
+                    self._gmshGroupIdList[objectNameAssignedToBoundary + "_2D"] = groupTag
+                else:
+                    self.createGroup(objectNameAssignedToBoundary + "_2D", objectNameAssignedToBoundary, 2, groupTag=self.getGmshGroupId(objectNameAssignedToBoundary))
+
     def createGroupsForObjectSurfacesUsedInPort(self):
-        for portObjectName in self._portList.keys():
-            self.createGroup(portObjectName+"_2D", portObjectName, 2, groupTag=self.getGmshGroupId(portObjectName))
+        # for portObjectName in self._portList.keys():
+        for portObj in self._portList.values():
+            for portAssignedObjectName in portObj["objects"]:
+                self.createGroup(portAssignedObjectName+"_2D", portAssignedObjectName, 2, groupTag=self.getGmshGroupId(portAssignedObjectName))
 
     def addMaterial(self, name:str="", er:float|None=None, ur:float|None=None, conductivity:float|None=None, tand:float|None=None) -> None:
         if not name in self._materialList.keys():
@@ -582,9 +599,20 @@ class BasicMfemMesher:
     def getBoundaryConditionAttributesAsDictForPalaceSimulationFile(self, boundaryName:str) -> dict:
         boundaryObject = {}
 
+        #
+        #   Common property for all boundary condition items, "Attributes" what are gmsh tag to which this boundary condition is assigned
+        #
         boundaryObject["Attributes"] = []
-        for objectNameAssignedToBoundary in self._boundaryConditionList[boundaryName]:
-            boundaryObject["Attributes"].append(self._gmshGroupIdList[objectNameAssignedToBoundary + "_2D"])
+        if boundaryName in self._boundaryConditionList.keys():
+            for objectNameAssignedToBoundary in self._boundaryConditionList[boundaryName]:
+                #assign this boundary condition just to surface, we are using out internal naming convention that imported step file
+                #has postfix _2D for its surface
+                boundaryObject["Attributes"].append(self._gmshGroupIdList[objectNameAssignedToBoundary + "_2D"])
+
+        if boundaryName in self._lumpedPartList.keys():
+            for objectNameAssignedToBoundary in self._lumpedPartList[boundaryName]["objects"]:
+                boundaryObject["Attributes"].append(self._gmshGroupIdList[objectNameAssignedToBoundary + "_2D"])
+
 
         return boundaryObject
 
@@ -593,6 +621,9 @@ class BasicMfemMesher:
 
     def getBoundaryConditionNamesList(self):
         return self._boundaryConditionList.keys()
+
+    def getLumpedPartNamesList(self):
+        return self._lumpedPartList.keys()
 
     def getAllMaterialObjectForPalace(self):
         palaceMaterialObject = []
@@ -603,10 +634,30 @@ class BasicMfemMesher:
 
         return palaceMaterialObject
 
-    def getAllBoundaryConditionsObjectForPalace(self):
+    def getAllBoundaryConditionsObjectForPalace(self) -> dict:
         palaceBoundaryConditionObject = {}
+
+        #
+        #   Create JSON definition for boundary condition from boundary conditions
+        #       - it takes boundary condition type as key for array which are "Absorbing", "PEC", "PMC", "Ground", "ZeroCharge" and
+        #         assign json object to it like {"Attributes": [...]}
+        #
         for boundaryName in self.getBoundaryConditionNamesList():
             palaceBoundaryConditionObject[boundaryName] = self.getBoundaryConditionAttributesAsDictForPalaceSimulationFile(boundaryName)
+
+        #
+        #   Create JSON definition for boundary condition from lumped parts
+        #       - this uses boundary condition "Impedance" in palace which can define parameters Rs, Ls, Cs
+        #
+        for boundaryName in self.getLumpedPartNamesList():
+            if not "Impedance" in palaceBoundaryConditionObject.keys():
+                palaceBoundaryConditionObject["Impedance"] = []
+
+            boundaryObject = self.getBoundaryConditionAttributesAsDictForPalaceSimulationFile(boundaryName)
+            boundaryObject["Rs"] = self._lumpedPartList[boundaryName]["Rs"]
+            boundaryObject["Ls"] = self._lumpedPartList[boundaryName]["Ls"]
+            boundaryObject["Cs"] = self._lumpedPartList[boundaryName]["Cs"]
+            palaceBoundaryConditionObject["Impedance"].append(boundaryObject)
 
         return palaceBoundaryConditionObject
 
@@ -619,12 +670,21 @@ class BasicMfemMesher:
                 #   - plane or whatever 2D structure and its object is type of surface use to identitfy it in gmshIdList just its name
                 #   - surface of imported STEP file then use portName+"_2D" since this group will be created and will cover object surface
                 #
-                portGeometryObjectType = self.getGeometryObject(portObj["name"])["type"]
-                gmshPortObjId = self._gmshGroupIdList[portObj["name"]] if portGeometryObjectType == "surface" else self._gmshGroupIdList[portObj["name"]+"_2D"] if portGeometryObjectType == "stepfile" else -1
+                gmshPortObjIdList = []
+                for objectNameAssignedToPort in portObj["objects"]:
+                    portGeometryObjectType = self.getGeometryObject(objectNameAssignedToPort)["type"]
+                    gmshPortObjIdList.append(
+                        self._gmshGroupIdList[objectNameAssignedToPort]
+                        if portGeometryObjectType == "surface"
+                        else self._gmshGroupIdList[objectNameAssignedToPort+"_2D"]
+                        if portGeometryObjectType == "stepfile"
+                        else
+                        -1
+                    )
 
                 palaceLumpedPortObject.append({
                     "Index": portObj["index"],
-                    "Attributes": [gmshPortObjId],
+                    "Attributes": gmshPortObjIdList,
                     "Direction": portObj["direction"],
                     "R": portObj["R"],
                     "Excitation": True if portObj["excitation"] > 0 else False
@@ -636,9 +696,13 @@ class BasicMfemMesher:
         palaceSurfaceCurrentObject = []
         for portObj in self._portList.values():
             if portObj["type"] == "lumped":
+                gmshGroupIdList = []
+                for objectNameAssignedToPort in portObj["objects"]:
+                    gmshGroupIdList.append(self._gmshGroupIdList[objectNameAssignedToPort])
+
                 palaceSurfaceCurrentObject.append({
                     "Index": portObj["index"],
-                    "Attributes": [self._gmshGroupIdList[portObj["name"]]],
+                    "Attributes": gmshGroupIdList,
                     "Direction": portObj["direction"]
                 })
         return palaceSurfaceCurrentObject
@@ -647,10 +711,15 @@ class BasicMfemMesher:
         palaceTerminalObject = []
         for portObj in self._portList.values():
             if portObj["type"] == "lumped":
+                gmshGroupIdList = []
+                for objectNameAssignedToPort in portObj["objects"]:
+                    gmshGroupIdList.append(self._gmshGroupIdList[objectNameAssignedToPort])
+
                 palaceTerminalObject.append({
                     "Index": portObj["index"],
-                    "Attributes": [self._gmshGroupIdList[portObj["name"]]]
+                    "Attributes": gmshGroupIdList
                 })
+
         return palaceTerminalObject
 
     def getGmshGroupId(self, groupName):
@@ -659,15 +728,44 @@ class BasicMfemMesher:
     def getGmshGroupIdList(self):
         return self._gmshGroupIdList
 
-    def addPort(self, objectName="", direction="-Z", R=50, excitation=False, type="lumped", index=1):
-        self._portList[objectName] = {
-            "name": objectName,
+    def addPort(self, name="", direction="-Z", R=50, excitation=False, type="lumped", index=1):
+        self._portList[name] = {
+            "name": name,
             "direction": direction,
             "R": R,
             "excitation": excitation,
             "type": type,
-            "index": index
+            "index": index,
+            "objects": []
         }
+        return
+
+    def addObjectToPort(self, portName: str, objectName: str) -> None:
+        if not "objects" in self._portList[portName].keys():
+            self._portList[portName]["objects"] = []
+
+        self._portList[portName]["objects"].append(objectName)
+        self._portList[portName]["objects"] = list(set(self._portList[portName]["objects"]))
+
+        return
+
+    def addLumpedPart(self, name="", Rs:float=0.0, Ls:float=0.0, Cs:float=0.0):
+        self._lumpedPartList[name] = {
+            "name": name,
+            "Rs": Rs,
+            "Ls": Ls,
+            "Cs": Cs,
+            "objects": []
+        }
+        return
+
+    def addObjectToLumpedPart(self, lumpedPartName: str, objectName: str) -> None:
+        if not "objects" in self._lumpedPartList[lumpedPartName].keys():
+            self._lumpedPartList[lumpedPartName]["objects"] = []
+
+        self._lumpedPartList[lumpedPartName]["objects"].append(objectName)
+        self._lumpedPartList[lumpedPartName]["objects"] = list(set(self._lumpedPartList[lumpedPartName]["objects"]))
+
         return
 
     def gmshCreatePlate(self,
