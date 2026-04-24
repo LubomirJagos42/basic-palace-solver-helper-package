@@ -17,6 +17,7 @@ class BasicMfemMesher:
 
     _gmshGroupIdList = {}
     _gmshGroupIdIndex = 100000
+    _gmshGroupIdIndexIncrement = 100000     #after material object, port object or whatever object or group is added internal ID counter increase by this to all groups have different ID
 
     def __init__(self):
         print("MFEM mesher created")
@@ -49,7 +50,7 @@ class BasicMfemMesher:
             self.geometryObjectList.append({"name": name, "dimtags": self.importStepFileAndGetAllNewEntities(stepfile), "priority": priority, "type": "stepfile", "filepath": stepfile})
 
             self._gmshGroupIdList[name] = self._gmshGroupIdIndex
-            self._gmshGroupIdIndex += 100000
+            self._gmshGroupIdIndex += self._gmshGroupIdIndexIncrement
 
         return
 
@@ -60,7 +61,7 @@ class BasicMfemMesher:
 
         self.geometryObjectList.append({"name": name, "dimtags": dimtags, "priority": priority, "type": type})
         self._gmshGroupIdList[name] = self._gmshGroupIdIndex
-        self._gmshGroupIdIndex += 100000
+        self._gmshGroupIdIndex += self._gmshGroupIdIndexIncrement
 
     def addGmshVolumeObject(self, name, gmshObjectTag, priority=-1):
         _, gmshObjectBoundary = gmsh.model.occ.getSurfaceLoops(gmshObjectTag)
@@ -238,12 +239,12 @@ class BasicMfemMesher:
         groupName = "UNTAGGED_2D"
         gmsh.model.addPhysicalGroup(2, untaggedSurfaceTagList, self._gmshGroupIdIndex, groupName)
         self._gmshGroupIdList[groupName] = self._gmshGroupIdIndex
-        self._gmshGroupIdIndex += 100000
+        self._gmshGroupIdIndex += self._gmshGroupIdIndexIncrement
 
         groupName = "UNTAGGED_3D"
         gmsh.model.addPhysicalGroup(3, untaggedVolumeTagList, self._gmshGroupIdIndex, groupName)
         self._gmshGroupIdList[groupName] = self._gmshGroupIdIndex
-        self._gmshGroupIdIndex += 100000
+        self._gmshGroupIdIndex += self._gmshGroupIdIndexIncrement
 
     def cutVolumesInsideModel(self):
         self.sortGeomtriesBasedOnPriority()
@@ -379,13 +380,13 @@ class BasicMfemMesher:
             for geometryObjectName in geometryObjectNameOrList:
                 all_surfaces.extend([tag for dim, tag in self.getGeometryObject(geometryObjectName)["dimtags"] if dim == 2])
 
-        ctag = gmsh.model.mesh.field.add("Constant")
-        gmsh.model.mesh.field.set_numbers(ctag, "SurfacesList", all_surfaces)
-        gmsh.model.mesh.field.set_number(ctag, "VIn", max_size)
+        constantTag = gmsh.model.mesh.field.add("Constant")
+        gmsh.model.mesh.field.set_numbers(constantTag, "SurfacesList", all_surfaces)
+        gmsh.model.mesh.field.set_number(constantTag, "VIn", max_size)
 
-        self._meshFieldList.append(ctag)
+        self._meshFieldList.append(constantTag)
 
-        return ctag
+        return constantTag
 
     def setSizeForVolume(self, geometryObjectNameOrList: str | list[str], max_size: float=0.0):
         # Collect all surface tags
@@ -396,13 +397,69 @@ class BasicMfemMesher:
             for geometryObjectName in geometryObjectNameOrList:
                 all_volumes.extend([tag for dim, tag in self.getGeometryObject(geometryObjectName)["dimtags"] if dim == 3])
 
-        ctag = gmsh.model.mesh.field.add("Constant")
-        gmsh.model.mesh.field.set_numbers(ctag, "VolumesList", all_volumes)
-        gmsh.model.mesh.field.set_number(ctag, "VIn", max_size)
+        constantTag = gmsh.model.mesh.field.add("Constant")
+        gmsh.model.mesh.field.set_numbers(constantTag, "VolumesList", all_volumes)
+        gmsh.model.mesh.field.set_number(constantTag, "VIn", max_size)
 
-        self._meshFieldList.append(ctag)
+        self._meshFieldList.append(constantTag)
 
-        return ctag
+        return constantTag
+
+    def setSizeBoundary(self,
+                          boundaryObjectName: str,
+                          size: float,
+                          growth_rate: float = 3,
+                          max_size: float | None = None) -> None:
+
+        """Refine the mesh size along the boundary of a conducting surface
+
+        The growth rate determines how quickly the mesh size is allowed to increase away from the face boundary.
+
+        Args:
+            boundary (str): Name of boundary/surface object to refine the mesh on
+            size (float): The mesh size limit in meters
+            growth_rate (float, optional): The mesh growth rate. Defaults to 3.
+            max_size (float, optional): The maximum mesh size. Defaults to None.
+        """
+        dimtagsList = self.getGmshGroupId(boundaryObjectName)["dimtags"]
+
+        growth_distance = (growth_rate * max_size - size) / (growth_rate - 1)
+        logger.debug(f'Setting boundary size for region {dimtagsList} to {size}, GR={growth_rate}, dist={growth_distance}mm, Max={max_size}mm')
+
+        nodes = gmsh.model.getBoundary(dimtags, combined=False, oriented=False, recursive=False)
+
+        tags2D = [dimtag for dimtag in dimtagsList if dimtag[0] == 2]
+        tags3D = [dimtag for dimtag in dimtagsList if dimtag[0] == 3]
+
+        disttag = gmsh.model.mesh.field.add("Distance")
+        if len(tags2D) > 0:
+            gmsh.model.mesh.field.setNumbers(disttag, "CurvesList", [n[1] for n in nodes])
+        if len(tags3D) > 0:
+            gmsh.model.mesh.field.setNumbers(disttag, 'SurfacesList', [n[1] for n in nodes])
+        gmsh.model.mesh.field.setNumber(disttag, "Sampling", 100)
+
+        thresholdFieldTag = gmsh.model.mesh.field.add("Threshold")
+        gmsh.model.mesh.field.setNumber(thresholdFieldTag, "InField", disttag)
+        gmsh.model.mesh.field.setNumber(thresholdFieldTag, "SizeMin", size)
+        gmsh.model.mesh.field.setNumber(thresholdFieldTag, "SizeMax", max_size)
+        gmsh.model.mesh.field.setNumber(thresholdFieldTag, "DistMin", size)
+        gmsh.model.mesh.field.setNumber(thresholdFieldTag, "DistMax", growth_distance)
+
+        self.addMeshFieldToList(thresholdFieldTag)
+
+    def setSize(self, objectName: str, size: float) -> None:
+
+        ## THIS IS COPIED FROM EMERGE
+        # if obj.dim == 2:
+        #     self._set_size_on_face(obj.tags, size)
+        # elif obj.dim == 3:
+        #     self._set_size_in_domain(obj.tags, size)
+        # elif obj.dim == 1:
+        #     self._set_size_on_edge(obj.tags, size)
+        # elif obj.dim == 0:
+        #     self._set_size_on_point(obj.tags, size)
+
+        raise("Method not implemented!")
 
     def setBackgroundMinFieldUsingAllDefinedFields(self):
         f_min = gmsh.model.mesh.field.add("Min")
@@ -455,7 +512,7 @@ class BasicMfemMesher:
         if not name in self._materialList.keys():
             self._materialList[name] ={}
             self._gmshGroupIdList["material_"+name] = self._gmshGroupIdIndex
-            self._gmshGroupIdIndex += 100000
+            self._gmshGroupIdIndex += self._gmshGroupIdIndexIncrement
 
         if er is not None:
             self._materialList[name]["er"] = er
@@ -481,7 +538,7 @@ class BasicMfemMesher:
         if not boundaryConditionName in self._boundaryConditionList.keys():
             self._boundaryConditionList[boundaryConditionName] = []
             self._gmshGroupIdList["boundary_"+boundaryConditionName] = self._gmshGroupIdIndex
-            self._gmshGroupIdIndex += 100000
+            self._gmshGroupIdIndex += self._gmshGroupIdIndexIncrement
 
         self._boundaryConditionList[boundaryConditionName].append(objectName)
         self._boundaryConditionList[boundaryConditionName] = list(set(self._boundaryConditionList[boundaryConditionName]))
@@ -557,13 +614,22 @@ class BasicMfemMesher:
         palaceLumpedPortObject = []
         for portObj in self._portList.values():
             if portObj["type"] == "lumped":
+                #
+                # if port is created as:
+                #   - plane or whatever 2D structure and its object is type of surface use to identitfy it in gmshIdList just its name
+                #   - surface of imported STEP file then use portName+"_2D" since this group will be created and will cover object surface
+                #
+                portGeometryObjectType = self.getGeometryObject(portObj["name"])["type"]
+                gmshPortObjId = self._gmshGroupIdList[portObj["name"]] if portGeometryObjectType == "surface" else self._gmshGroupIdList[portObj["name"]+"_2D"] if portGeometryObjectType == "stepfile" else -1
+
                 palaceLumpedPortObject.append({
                     "Index": portObj["index"],
-                    "Attributes": [self._gmshGroupIdList[portObj["name"]]],
+                    "Attributes": [gmshPortObjId],
                     "Direction": portObj["direction"],
                     "R": portObj["R"],
                     "Excitation": True if portObj["excitation"] > 0 else False
                 })
+
         return palaceLumpedPortObject
 
     def getAllSurfaceCurrentForPortObjectForPalace(self):
@@ -783,4 +849,13 @@ class BasicMfemMesher:
 
         return
 
-
+    def addFieldBall(self, VIn:float=5.0, VOut:float=15.0, Radius:float=60.0, XCenter:float=0.0, YCenter:float=0.0, ZCenter:float=0.0, Thickness:float=10.0) -> int:
+        fieldId = gmsh.model.mesh.field.add("Ball")
+        gmsh.model.mesh.field.setNumber(fieldId, "VIn", VIn)              # inside sphere
+        gmsh.model.mesh.field.setNumber(fieldId, "VOut", VOut)            # outside sphere
+        gmsh.model.mesh.field.setNumber(fieldId, "Radius", Radius)        # sphere radius
+        gmsh.model.mesh.field.setNumber(fieldId, "XCenter", XCenter)
+        gmsh.model.mesh.field.setNumber(fieldId, "YCenter", YCenter)
+        gmsh.model.mesh.field.setNumber(fieldId, "ZCenter", ZCenter)
+        gmsh.model.mesh.field.setNumber(fieldId, "Thickness", Thickness)  # transition zone
+        return fieldId
