@@ -15,6 +15,7 @@ class BasicMfemMesher:
     _boundaryConditionList = {}
     _portList = {}
     _lumpedPartList = {}
+    _conductivityList = {}
 
     _gmshGroupIdList = {}
     _gmshGroupIdIndex = 100000
@@ -597,6 +598,15 @@ class BasicMfemMesher:
             return None
 
     def getBoundaryConditionAttributesAsDictForPalaceSimulationFile(self, boundaryName:str) -> dict:
+        """
+        Create basic simlationConfig["Boundaries"][<boundary name>] object and create just totaly basic object with just "Attributes" property defined.
+        If boundary needs to specify more properties like "Impedance" has Rs, Ls, Cs it needs to be added after using this function.
+        Args:
+            boundaryName:
+
+        Returns:
+
+        """
         boundaryObject = {}
 
         #
@@ -613,6 +623,9 @@ class BasicMfemMesher:
             for objectNameAssignedToBoundary in self._lumpedPartList[boundaryName]["objects"]:
                 boundaryObject["Attributes"].append(self._gmshGroupIdList[objectNameAssignedToBoundary + "_2D"])
 
+        if boundaryName in self._conductivityList.keys():
+            for objectNameAssignedToBoundary in self._conductivityList[boundaryName]["objects"]:
+                boundaryObject["Attributes"].append(self._gmshGroupIdList[objectNameAssignedToBoundary + "_2D"])
 
         return boundaryObject
 
@@ -624,6 +637,9 @@ class BasicMfemMesher:
 
     def getLumpedPartNamesList(self):
         return self._lumpedPartList.keys()
+
+    def getConductivityNamesList(self):
+        return self._conductivityList.keys()
 
     def getAllMaterialObjectForPalace(self):
         palaceMaterialObject = []
@@ -658,6 +674,19 @@ class BasicMfemMesher:
             boundaryObject["Ls"] = self._lumpedPartList[boundaryName]["Ls"]
             boundaryObject["Cs"] = self._lumpedPartList[boundaryName]["Cs"]
             palaceBoundaryConditionObject["Impedance"].append(boundaryObject)
+
+        #
+        #   Add JSON conductivity object
+        #
+        for boundaryName in self.getConductivityNamesList():
+            if not "Conductivity" in palaceBoundaryConditionObject.keys():
+                palaceBoundaryConditionObject["Conductivity"] = []
+
+            boundaryObject = self.getBoundaryConditionAttributesAsDictForPalaceSimulationFile(boundaryName)
+            boundaryObject["Conductivity"] = self._conductivityList[boundaryName]["Conductivity"]
+            boundaryObject["Permeability"] = self._conductivityList[boundaryName]["Permeability"]
+            boundaryObject["Thickness"] = self._conductivityList[boundaryName]["Thickness"]
+            palaceBoundaryConditionObject["Conductivity"].append(boundaryObject)
 
         return palaceBoundaryConditionObject
 
@@ -765,6 +794,25 @@ class BasicMfemMesher:
 
         self._lumpedPartList[lumpedPartName]["objects"].append(objectName)
         self._lumpedPartList[lumpedPartName]["objects"] = list(set(self._lumpedPartList[lumpedPartName]["objects"]))
+
+        return
+
+    def addConductivity(self, name="", conductivity:float=0.0, permeability:float=0.0, thickness:float=0.0):
+        self._conductivityList[name] = {
+            "name": name,
+            "Conductivity": conductivity,
+            "Permeability": permeability,
+            "Thickness": thickness,
+            "objects": []
+        }
+        return
+
+    def addObjectToConductivity(self, conductivityName: str, objectName: str) -> None:
+        if not "objects" in self._conductivityList[conductivityName].keys():
+            self._conductivityList[conductivityName]["objects"] = []
+
+        self._conductivityList[conductivityName]["objects"].append(objectName)
+        self._conductivityList[conductivityName]["objects"] = list(set(self._conductivityList[conductivityName]["objects"]))
 
         return
 

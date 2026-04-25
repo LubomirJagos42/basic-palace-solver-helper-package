@@ -5,7 +5,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setup(
     name="basicpalacesolverhelperpackage",
-    version="0.0.3",
+    version="0.0.4",
     author="Lubomir Jagos",
     author_email="lubomir.jagos.42@gmail.com",
     description="Mesh creation and plot utilities for Palace EM solver or other FEM solver.",
