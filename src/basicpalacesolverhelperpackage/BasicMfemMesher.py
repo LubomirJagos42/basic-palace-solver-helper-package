@@ -5,6 +5,7 @@
 
 import gmsh
 import numpy as np
+from typing import Literal
 
 class BasicMfemMesher:
 
@@ -352,7 +353,7 @@ class BasicMfemMesher:
     def addMeshFieldToList(self, fieldObj):
         self._meshFieldList.append(fieldObj)
 
-    def setSurfaceMeshSize(self, geometryObjectNameOrList: str | list[str], sizeMin: float=0.0, sizeMax: float=0.0, distanceMin: float=0.0, distanceMax: float=0.0):
+    def setSurfaceMeshSize(self, geometryObjectNameOrList: str | list[str], sizeMin: float=0.0, sizeMax: float=0.0, distanceMin: float=0.0, distanceMax: float=0.0, useDistanceFrom: list[Literal["edges", "surface"]] = ["edges"]):
         # Collect all surface tags
         all_surfaces = []
         if type(geometryObjectNameOrList) == str:
@@ -363,7 +364,12 @@ class BasicMfemMesher:
 
         # Simple distance-based field
         field_dist = gmsh.model.mesh.field.add("Distance")
-        gmsh.model.mesh.field.setNumbers(field_dist, "SurfacesList", all_surfaces)
+        if "surface" in useDistanceFrom:
+            gmsh.model.mesh.field.setNumbers(field_dist, "SurfacesList", all_surfaces)
+        if "edges" in useDistanceFrom:
+            all_edges = gmsh.model.getBoundary([(2, surfaceTag) for surfaceTag in all_surfaces], combined=False, recursive=False, oriented=False)
+            all_edges = [dimtag[1] for dimtag in all_edges]
+            gmsh.model.mesh.field.setNumbers(field_dist, "CurvesList", all_edges)
 
         field_threshold = gmsh.model.mesh.field.add("Threshold")
         gmsh.model.mesh.field.setNumber(field_threshold, "InField", field_dist)
@@ -375,6 +381,20 @@ class BasicMfemMesher:
         self._meshFieldList.append(field_threshold)
 
         return field_threshold
+
+    def setSizeOnEdge(self, tags: list[int], max_size: float, out_size: float | None = None) -> None:
+        """Define the size of the mesh on an edge
+
+        Args:
+            tags (list[int]): The tags of the geometry
+            max_size (float): The maximum size (in meters)
+        """
+        constantTag = gmsh.model.mesh.field.add("Constant")
+        gmsh.model.mesh.field.set_numbers(constantTag, "CurvesList", tags)
+        gmsh.model.mesh.field.set_number(constantTag, "VIn", max_size)
+        if out_size is not None:
+            gmsh.model.mesh.field.set_number(constantTag, "VOut", out_size)
+        self._meshFieldList.append(constantTag)
 
     def setSizeOnFace(self, geometryObjectNameOrList: str | list[str], max_size: float=0.0):
         # Collect all surface tags
@@ -413,8 +433,8 @@ class BasicMfemMesher:
     def setSizeBoundary(self,
                           boundaryObjectName: str,
                           size: float,
-                          growth_rate: float = 3,
-                          max_size: float | None = None) -> None:
+                          max_size: float | None = None,
+                          growth_rate: float = 3) -> None:
 
         """Refine the mesh size along the boundary of a conducting surface
 
@@ -426,31 +446,40 @@ class BasicMfemMesher:
             growth_rate (float, optional): The mesh growth rate. Defaults to 3.
             max_size (float, optional): The maximum mesh size. Defaults to None.
         """
-        dimtagsList = self.getGmshGroupId(boundaryObjectName)["dimtags"]
+        dimtagsList = self.getGeometryObject(boundaryObjectName)["dimtags"]
+        dimtagsList = self.removeDimtagsNotInModel(dimtagsList)
+
+        if max_size is None:
+            max_size = size
 
         growth_distance = (growth_rate * max_size - size) / (growth_rate - 1)
-        logger.debug(f'Setting boundary size for region {dimtagsList} to {size}, GR={growth_rate}, dist={growth_distance}mm, Max={max_size}mm')
+        print(f'Setting boundary size for region {dimtagsList} to {size}, GR={growth_rate}, dist={growth_distance}mm, Max={max_size}mm')
 
-        nodes = gmsh.model.getBoundary(dimtags, combined=False, oriented=False, recursive=False)
+        objectDimension = -1
+        for dimtag in dimtagsList:
+            if dimtag[0] == 2:
+                objectDimension = 2
+            if dimtag[0] == 3:
+                objectDimension = 3
 
-        tags2D = [dimtag for dimtag in dimtagsList if dimtag[0] == 2]
-        tags3D = [dimtag for dimtag in dimtagsList if dimtag[0] == 3]
+        if objectDimension > -1:
+            nodes = gmsh.model.getBoundary(dimtagsList, combined=False, oriented=False, recursive=False)
 
-        disttag = gmsh.model.mesh.field.add("Distance")
-        if len(tags2D) > 0:
-            gmsh.model.mesh.field.setNumbers(disttag, "CurvesList", [n[1] for n in nodes])
-        if len(tags3D) > 0:
-            gmsh.model.mesh.field.setNumbers(disttag, 'SurfacesList', [n[1] for n in nodes])
-        gmsh.model.mesh.field.setNumber(disttag, "Sampling", 100)
+            disttag = gmsh.model.mesh.field.add("Distance")
+            if objectDimension == 2:
+                gmsh.model.mesh.field.setNumbers(disttag, "CurvesList", [n[1] for n in nodes if n[0] == 1])
+            if objectDimension == 3:
+                gmsh.model.mesh.field.setNumbers(disttag, 'SurfacesList', [n[1] for n in nodes if n[0] == 2])
+            gmsh.model.mesh.field.setNumber(disttag, "Sampling", 100)
 
-        thresholdFieldTag = gmsh.model.mesh.field.add("Threshold")
-        gmsh.model.mesh.field.setNumber(thresholdFieldTag, "InField", disttag)
-        gmsh.model.mesh.field.setNumber(thresholdFieldTag, "SizeMin", size)
-        gmsh.model.mesh.field.setNumber(thresholdFieldTag, "SizeMax", max_size)
-        gmsh.model.mesh.field.setNumber(thresholdFieldTag, "DistMin", size)
-        gmsh.model.mesh.field.setNumber(thresholdFieldTag, "DistMax", growth_distance)
+            thresholdFieldTag = gmsh.model.mesh.field.add("Threshold")
+            gmsh.model.mesh.field.setNumber(thresholdFieldTag, "InField", disttag)
+            gmsh.model.mesh.field.setNumber(thresholdFieldTag, "SizeMin", size)
+            gmsh.model.mesh.field.setNumber(thresholdFieldTag, "SizeMax", max_size)
+            gmsh.model.mesh.field.setNumber(thresholdFieldTag, "DistMin", size)
+            gmsh.model.mesh.field.setNumber(thresholdFieldTag, "DistMax", growth_distance)
 
-        self.addMeshFieldToList(thresholdFieldTag)
+            self.addMeshFieldToList(thresholdFieldTag)
 
     def setSize(self, objectName: str, size: float) -> None:
 
@@ -470,6 +499,11 @@ class BasicMfemMesher:
         f_min = gmsh.model.mesh.field.add("Min")
         gmsh.model.mesh.field.setNumbers(f_min, "FieldsList", self._meshFieldList)
         gmsh.model.mesh.field.setAsBackgroundMesh(f_min)
+
+    def setBackgroundFieldUsingAllDefinedFields(self, fieldType):
+        f_background = gmsh.model.mesh.field.add(fieldType)
+        gmsh.model.mesh.field.setNumbers(f_background, "FieldsList", self._meshFieldList)
+        gmsh.model.mesh.field.setAsBackgroundMesh(f_background)
 
     def createGroupsForAllImportedObjects(self, nameList: list[str] = []):
         for geometryObject in self.geometryObjectList:
@@ -1005,3 +1039,36 @@ class BasicMfemMesher:
         gmsh.model.mesh.field.setNumber(fieldId, "ZCenter", ZCenter)
         gmsh.model.mesh.field.setNumber(fieldId, "Thickness", Thickness)  # transition zone
         return fieldId
+
+    def removeDimtagsNotInModel(self, dimtagList):
+        modelAllDimtags = gmsh.model.getEntities()
+        return [dimtag for dimtag in dimtagList if dimtag in modelAllDimtags]
+
+    def getGeometryObjectDimension(self, name):
+        geometryObject = self.getGeometryObject(name)
+        dimtagList = self.removeDimtagsNotInModel(geometryObject["dimtags"])
+
+        objectDimension = -1
+        for dimtag in dimtagList:
+            if dimtag[0] == 2:
+                objectDimension = 2
+            if dimtag[0] == 3:
+                objectDimension = 3
+
+        return objectDimension
+
+    def getGeometryObjectEdges(self, name):
+        geometryObject = self.getGeometryObject(name)
+        dimtagList = self.removeDimtagsNotInModel(geometryObject["dimtags"])
+        objectDimension = self.getGeometryObjectDimension(name)
+
+        objectEdgeDimtags = []
+        if objectDimension == 3:
+            objectSurfaceDimtags = gmsh.model.getBoundary(dimtagList, combined=False, oriented=False, recursive=False)
+            objectEdgeDimtags = gmsh.model.getBoundary(objectSurfaceDimtags, combined=False, oriented=False, recursive=False)
+        elif objectDimension == 2:
+            objectEdgeDimtags = gmsh.model.getBoundary(dimtagList, combined=False, oriented=False, recursive=False)
+
+        return objectEdgeDimtags
+
+
