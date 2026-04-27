@@ -25,7 +25,18 @@ class BasicMfemMesher:
     def __init__(self):
         print("MFEM mesher created")
 
-    def get_tag_after_fragment (self, object_dimtags, input_dimtags, mapping):
+    def get_tag_after_fragment (self, object_dimtags:list[tuple[int, int]], input_dimtags:list[tuple[int, int]], mapping:list[list[tuple[int, int]]]):
+        """
+        Takes object dimtags from internal geometry manager, input dimtags for whole fragmentation and output mapping and return renewed dimtag list for
+        object which was used as input for fragmentation.
+        Args:
+            object_dimtags: list[tuple[int, int]]: Object dimtag list from internal geometry manager.
+            input_dimtags: list[tuple[int, int]]: Input dimtag list which are used for fragmentation.
+            mapping: Output mapping after fragmentation, this is used to remap original object dimtags to new ones.
+
+        Returns: list[tuple[int, int]]: Renewed object dimtags after fragmentation.
+
+        """
         resultDimtagList = []
         for objDimtag in object_dimtags:
             wasDimtagFound = False
@@ -41,7 +52,17 @@ class BasicMfemMesher:
     def setGmshGroupIdIncrement(self, incrementValue:int) -> None:
         self._gmshGroupIdIndexIncrement = incrementValue
 
-    def addStepfile(self, name, stepfile, priority=-1):
+    def addStepfile(self, name:str, stepfile:str, priority:int=-1) -> None:
+        """
+        Import stepfile into internal geometry manager and add its dimtags into it. Set internal geometry type to 'stepfile'
+        Args:
+            name:str: Object name, under this name it's represented in internal geometry manager.
+            stepfile:str: Path to STEP file.
+            priority:int: Internal object priority, higher priority number means object is more important and space occupied
+                      by it's volume surface is used for meshing over lower priority objects.
+
+        Returns: None
+        """
 
         isObjectAlreadyImported = False
         for importedObject in self.geometryObjectList:
@@ -60,7 +81,18 @@ class BasicMfemMesher:
 
         return
 
-    def addGmshObjectUsingDimtags(self, name: str, dimtags: list[tuple[int, int]], priority: int = -1, type: Literal["","surface","point","curve","stepfile"] = ""):
+    def addGmshObjectUsingDimtags(self, name: str, dimtags: list[tuple[int, int]], priority: int = -1, type: Literal["","surface","point","curve","stepfile"] = "") -> None:
+        """
+        Add object directly into internal geometry manager, dimtags must be specified.
+        Args:
+            name: str: Object name under which is specified inside internal geometry manager.
+            dimtags: list[tuple(int,int)]: Object dimtags.
+            priority: int: Priority, higher priority override object with lower priorities.
+            type: Literal["","surface","point","curve","stepfile"]: Type of object which should help with other processing.
+
+        Returns: None
+        """
+
         if priority == -1:
             priority = self.internalGeometryObjectIndexCounter
             self.internalGeometryObjectIndexCounter += 1
@@ -1064,7 +1096,7 @@ class BasicMfemMesher:
 
         return list(untagged), list(untagged_vols)
 
-    def removeDuplicateTagsInGeometryObjects(self):
+    def removeDuplicateTagsInGeometryObjects(self) -> None:
         """
         This goes from high priority objects to lower and removes common tags between them from lower priority, this method
         shouldn't exist if fragmentation method work right, but for now let's say it's easies sanitization to make model
@@ -1096,11 +1128,29 @@ class BasicMfemMesher:
         gmsh.model.mesh.field.setNumber(fieldId, "Thickness", Thickness)  # transition zone
         return fieldId
 
-    def removeDimtagsNotInModel(self, dimtagList):
+    def removeDimtagsNotInModel(self, dimtagList:list[tuple[int, int]]) -> list[tuple[int, int]]:
+        """
+        Takes dimtag list and remove dimtags which are not available at model.
+        Args:
+            dimtagList:
+
+        Returns:list[tuple[int, int]]: Dimtag list with dimtags available in model.
+        """
+
         modelAllDimtags = gmsh.model.getEntities()
         return [dimtag for dimtag in dimtagList if dimtag in modelAllDimtags]
 
-    def getGeometryObjectDimension(self, name):
+    def getGeometryObjectDimension(self, name: str) -> int:
+        """
+        Return wheteher object is 0D,1D,2D,3D. For now it iterates over object dimtags and checks their dimensionality, but
+        geometry objects inside geometry manager have also 'type' parameter which could be 'stepfile' or 'volume' or something
+        else.
+        Args:
+            name:str: Internal object name in geometry maanger
+
+        Returns:objectDimension:int
+        """
+
         geometryObject = self.getGeometryObject(name)
         dimtagList = self.removeDimtagsNotInModel(geometryObject["dimtags"])
 
@@ -1136,5 +1186,3 @@ class BasicMfemMesher:
             objectEdgeDimtags = gmsh.model.getBoundary(dimtagList, combined=False, oriented=False, recursive=False)
 
         return objectEdgeDimtags
-
-
