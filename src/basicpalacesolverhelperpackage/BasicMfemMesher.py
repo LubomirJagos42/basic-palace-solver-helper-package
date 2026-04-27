@@ -25,7 +25,7 @@ class BasicMfemMesher:
     def __init__(self):
         print("MFEM mesher created")
 
-    def get_tag_after_fragment (self, object_dimtags:list[tuple[int, int]], input_dimtags:list[tuple[int, int]], mapping:list[list[tuple[int, int]]]):
+    def get_tag_after_fragment (self, object_dimtags:list[tuple[int, int]], input_dimtags:list[tuple[int, int]], mapping:list[list[tuple[int, int]]]) -> list[tuple[int, int]]:
         """
         Takes object dimtags from internal geometry manager, input dimtags for whole fragmentation and output mapping and return renewed dimtag list for
         object which was used as input for fragmentation.
@@ -465,6 +465,44 @@ class BasicMfemMesher:
         self._meshFieldList.append(field_threshold)
 
         return field_threshold
+
+    def setCurveMeshSizeForDimtags(self, geometryObjectNameOrDimtagList: list[tuple[int,int]], sizeMin: float=0.0, sizeMax: float=1e22, distanceMin: float=0.0, distanceMax: float=1e22) -> int:
+        """
+        Set fine mesh size around curves in distance closer than distanceMin, if internal geometry manager name provided as dimtags are used edge
+        dimtags extracted from object.
+        Args:
+            geometryObjectNameOrDimtagList:
+            sizeMin: Fine mesh size.
+            sizeMax: By default is set to huge number to have affect to infinity ie. ignore this field as it's supposed that background field for whole model is set to 'Min'
+            distanceMin: Distance around curve where fine mesh is applied
+            distanceMax: ignored field therefore this field is set to huge number 1e22 to exclude sizeMax be aplicable
+
+        Returns: int: field number or -1 if no field was created
+        """
+
+        all_curve_tags = []
+        if type(geometryObjectNameOrDimtagList) == str:
+            all_curve_tags = [tag for dim, tag in self.getGeometryObjectEdges(geometryObjectNameOrDimtagList) if dim == 1]
+        elif type(geometryObjectNameOrDimtagList) == list:
+            all_curve_tags = [tag for dim, tag in geometryObjectNameOrDimtagList if dim == 1]
+
+        if len(all_curve_tags) > 0:
+            # Simple distance-based field
+            field_dist = gmsh.model.mesh.field.add("Distance")
+            gmsh.model.mesh.field.setNumbers(field_dist, "CurvesList", all_curve_tags)
+
+            field_threshold = gmsh.model.mesh.field.add("Threshold")
+            gmsh.model.mesh.field.setNumber(field_threshold, "InField", field_dist)
+            gmsh.model.mesh.field.setNumber(field_threshold, "SizeMin", sizeMin)  # Fine near points
+            gmsh.model.mesh.field.setNumber(field_threshold, "SizeMax", sizeMax)  # Coarse far away
+            gmsh.model.mesh.field.setNumber(field_threshold, "DistMin", distanceMin)
+            gmsh.model.mesh.field.setNumber(field_threshold, "DistMax", distanceMax)
+
+            self._meshFieldList.append(field_threshold)
+
+            return field_threshold
+
+        return -1
 
     def setSizeOnEdge(self, tags: list[int] | list[tuple[int,int]], max_size: float, out_size: float | None = None) -> None:
         """Define the size of the mesh on an edge
@@ -1184,5 +1222,7 @@ class BasicMfemMesher:
             objectEdgeDimtags = gmsh.model.getBoundary(objectSurfaceDimtags, combined=False, oriented=False, recursive=False)
         elif objectDimension == 2:
             objectEdgeDimtags = gmsh.model.getBoundary(dimtagList, combined=False, oriented=False, recursive=False)
+        elif objectDimension == 1:
+            objectEdgeDimtags = [dimtag for dimtag in geometryObject["dimtags"] if dimtag[0] == 1]
 
         return objectEdgeDimtags
