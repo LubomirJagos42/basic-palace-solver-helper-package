@@ -60,7 +60,7 @@ class BasicMfemMesher:
 
         return
 
-    def addGmshObjectUsingDimtags(self, name, dimtags, priority=-1, type=""):
+    def addGmshObjectUsingDimtags(self, name: str, dimtags: list[tuple[int, int]], priority: int = -1, type: Literal["","surface","point","curve","stepfile"] = ""):
         if priority == -1:
             priority = self.internalGeometryObjectIndexCounter
             self.internalGeometryObjectIndexCounter += 1
@@ -353,27 +353,79 @@ class BasicMfemMesher:
     def addMeshFieldToList(self, fieldObj):
         self._meshFieldList.append(fieldObj)
 
-    def setSurfaceMeshSize(self, geometryObjectNameOrList: str | list[str], sizeMin: float=0.0, sizeMax: float=0.0, distanceMin: float=0.0, distanceMax: float=0.0, useDistanceFrom: list[Literal["edges", "surface"]] = ["edges"]):
-        # Collect all surface tags
-        all_surfaces = []
+    def setSurfaceMeshSize(self, geometryObjectNameOrList: str | list[str], sizeMin: float=0.0, sizeMax: float=0.0, distanceMin: float=0.0, distanceMax: float=0.0, useDistanceFrom: list[Literal["edges", "surface", "points"]] = ["edges"]) -> int:
+        """
+        Specify surface mesh using field.
+        Args:
+            geometryObjectNameOrList:
+            sizeMin: Minimal mesh size, this parameters specified mesh size and is main purpose of this method
+            sizeMax: Mesh size outsize maximum distance from specified objects from which are mesh distance calculated
+            distanceMin: Inside this distance mesh is fine (sizeMin)
+            distanceMax: Outside this distance mesh is coarse (sizeMax)
+            useDistanceFrom:Literal["edges", "surface", "points"]: Mesh restricted size would be calculated by distance from specified object, by default it calculate distance from "edges"
+
+        Returns: field tag
+        """
+
+        all_surface_tags = []
         if type(geometryObjectNameOrList) == str:
-            all_surfaces.extend([tag for dim, tag in self.getGeometryObject(geometryObjectNameOrList)["dimtags"] if dim == 2])
+            all_surface_tags.extend([tag for dim, tag in self.getGeometryObject(geometryObjectNameOrList)["dimtags"] if dim == 2])
         else:
             for geometryObjectName in geometryObjectNameOrList:
-                all_surfaces.extend([tag for dim, tag in self.getGeometryObject(geometryObjectName)["dimtags"] if dim == 2])
+                all_surface_tags.extend([tag for dim, tag in self.getGeometryObject(geometryObjectName)["dimtags"] if dim == 2])
 
         # Simple distance-based field
         field_dist = gmsh.model.mesh.field.add("Distance")
         if "surface" in useDistanceFrom:
-            gmsh.model.mesh.field.setNumbers(field_dist, "SurfacesList", all_surfaces)
+            gmsh.model.mesh.field.setNumbers(field_dist, "SurfacesList", all_surface_tags)
         if "edges" in useDistanceFrom:
-            all_edges = gmsh.model.getBoundary([(2, surfaceTag) for surfaceTag in all_surfaces], combined=False, recursive=False, oriented=False)
+            all_edges = gmsh.model.getBoundary([(2, surfaceTag) for surfaceTag in all_surface_tags], combined=False, recursive=False, oriented=False)
             all_edges = [dimtag[1] for dimtag in all_edges]
             gmsh.model.mesh.field.setNumbers(field_dist, "CurvesList", all_edges)
+        if "points" in useDistanceFrom:
+            all_edges = gmsh.model.getBoundary([(2, surfaceTag) for surfaceTag in all_surface_tags], combined=False, recursive=False, oriented=False)
+            all_points = gmsh.model.getBoundary(all_edges, combined=False, recursive=False, oriented=False)
+            all_points = [dimtag[1] for dimtag in all_points]
+            gmsh.model.mesh.field.setNumbers(field_dist, "PointsList", all_points)
 
         field_threshold = gmsh.model.mesh.field.add("Threshold")
         gmsh.model.mesh.field.setNumber(field_threshold, "InField", field_dist)
         gmsh.model.mesh.field.setNumber(field_threshold, "SizeMin", sizeMin)  # Fine near surfaces
+        gmsh.model.mesh.field.setNumber(field_threshold, "SizeMax", sizeMax)  # Coarse far away
+        gmsh.model.mesh.field.setNumber(field_threshold, "DistMin", distanceMin)
+        gmsh.model.mesh.field.setNumber(field_threshold, "DistMax", distanceMax)
+
+        self._meshFieldList.append(field_threshold)
+
+        return field_threshold
+
+    def setPointMeshSize(self, geometryObjectNameOrList: str | list[str], sizeMin: float=0.0, sizeMax: float=0.0, distanceMin: float=0.0, distanceMax: float=0.0) -> int:
+        """
+        Specified mesh size around gmsh object points. Object is specified by its name in internal geometry object manager.
+        Args:
+            geometryObjectNameOrList:
+            sizeMin: Fine mesh size inside distance min.
+            sizeMax: Coarse mesh size outside distance max.
+            distanceMin: Inside this distance object mesh is fine mesh.
+            distanceMax: Outside this distance object is set to be coarse.
+
+        Returns: field tag
+        """
+
+        all_point_tags = []
+        if type(geometryObjectNameOrList) == str:
+            all_point_tags.extend([tag for dim, tag in self.getGeometryObject(geometryObjectNameOrList)["dimtags"] if dim == 0])
+        else:
+            for geometryObjectName in geometryObjectNameOrList:
+                all_point_tags.extend([tag for dim, tag in self.getGeometryObject(geometryObjectName)["dimtags"] if dim == 0])
+
+        # Simple distance-based field
+        field_dist = gmsh.model.mesh.field.add("Distance")
+        gmsh.model.mesh.field.setNumbers(field_dist, "PointsList", all_point_tags)
+
+        field_threshold = gmsh.model.mesh.field.add("Threshold")
+        gmsh.model.mesh.field.setNumber(field_threshold, "InField", field_dist)
+        gmsh.model.mesh.field.setNumber(field_threshold, "SizeMin", sizeMin)  # Fine near points
         gmsh.model.mesh.field.setNumber(field_threshold, "SizeMax", sizeMax)  # Coarse far away
         gmsh.model.mesh.field.setNumber(field_threshold, "DistMin", distanceMin)
         gmsh.model.mesh.field.setNumber(field_threshold, "DistMax", distanceMax)
@@ -485,7 +537,7 @@ class BasicMfemMesher:
 
             self.addMeshFieldToList(thresholdFieldTag)
 
-    def setSize(self, objectName: str, size: float) -> None:
+    def setSize(self, objectName: str, size: float, distanceMinForPoint: float = 10.0) -> None:
 
         objectDimension = self.getGeometryObjectDimension(objectName)
         if objectDimension == 2:
@@ -496,8 +548,8 @@ class BasicMfemMesher:
             allEdgesDimtags = self.getGeometryObjectEdges(objectName)
             self.setSizeOnEdge(objectName, allEdgesDimtags)
         elif objectDimension == 0:
-            # self._set_size_on_point(obj.tags, size)
-            raise("Mesher object setSize() for object dimension 0 not implemented!")
+            #TODO: Need to figure out from where to take this minimal distance
+            self.setPointMeshSize(objectName, size, 1e22, distanceMinForPoint, 1e22)
 
     def setBackgroundMinFieldUsingAllDefinedFields(self):
         f_min = gmsh.model.mesh.field.add("Min")
@@ -1053,11 +1105,21 @@ class BasicMfemMesher:
         dimtagList = self.removeDimtagsNotInModel(geometryObject["dimtags"])
 
         objectDimension = -1
+
+        # First check if object is probably 2D, 3D
         for dimtag in dimtagList:
             if dimtag[0] == 2:
                 objectDimension = 2
             if dimtag[0] == 3:
                 objectDimension = 3
+
+        # when there are no 2D or 3D tags then check if object is 0D, 1D diemnsion means it's curve or points
+        if objectDimension == -1:
+            for dimtag in dimtagList:
+                if dimtag[0] == 0:
+                    objectDimension = 0
+                if dimtag[0] == 1:
+                    objectDimension = 1
 
         return objectDimension
 
