@@ -382,13 +382,17 @@ class BasicMfemMesher:
 
         return field_threshold
 
-    def setSizeOnEdge(self, tags: list[int], max_size: float, out_size: float | None = None) -> None:
+    def setSizeOnEdge(self, tags: list[int] | list[tuple[int,int]], max_size: float, out_size: float | None = None) -> None:
         """Define the size of the mesh on an edge
 
         Args:
-            tags (list[int]): The tags of the geometry
+            tags (list[int] | list[tuple[int,int]]): The tags or dimtags of the geometry
             max_size (float): The maximum size (in meters)
         """
+        if len(tags) > 0:
+            if type(tags[0]) == tuple:
+                tags = [dimtag[1] for dimtag in tags if dimtag[0] == 1] #extract just curves tags
+
         constantTag = gmsh.model.mesh.field.add("Constant")
         gmsh.model.mesh.field.set_numbers(constantTag, "CurvesList", tags)
         gmsh.model.mesh.field.set_number(constantTag, "VIn", max_size)
@@ -483,17 +487,17 @@ class BasicMfemMesher:
 
     def setSize(self, objectName: str, size: float) -> None:
 
-        ## THIS IS COPIED FROM EMERGE
-        # if obj.dim == 2:
-        #     self._set_size_on_face(obj.tags, size)
-        # elif obj.dim == 3:
-        #     self._set_size_in_domain(obj.tags, size)
-        # elif obj.dim == 1:
-        #     self._set_size_on_edge(obj.tags, size)
-        # elif obj.dim == 0:
-        #     self._set_size_on_point(obj.tags, size)
-
-        raise("Method not implemented!")
+        objectDimension = self.getGeometryObjectDimension(objectName)
+        if objectDimension == 2:
+            self.setSizeOnFace(objectName, size)
+        elif objectDimension == 3:
+            self.setSizeForVolume(objectName, size)
+        elif objectDimension == 1:
+            allEdgesDimtags = self.getGeometryObjectEdges(objectName)
+            self.setSizeOnEdge(objectName, allEdgesDimtags)
+        elif objectDimension == 0:
+            # self._set_size_on_point(obj.tags, size)
+            raise("Mesher object setSize() for object dimension 0 not implemented!")
 
     def setBackgroundMinFieldUsingAllDefinedFields(self):
         f_min = gmsh.model.mesh.field.add("Min")
@@ -1057,7 +1061,7 @@ class BasicMfemMesher:
 
         return objectDimension
 
-    def getGeometryObjectEdges(self, name):
+    def getGeometryObjectEdges(self, name: str) -> list[tuple[int, int]]:
         geometryObject = self.getGeometryObject(name)
         dimtagList = self.removeDimtagsNotInModel(geometryObject["dimtags"])
         objectDimension = self.getGeometryObjectDimension(name)
