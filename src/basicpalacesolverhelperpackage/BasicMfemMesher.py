@@ -473,7 +473,7 @@ class BasicMfemMesher:
         Args:
             geometryObjectNameOrDimtagList:
             sizeMin: Fine mesh size.
-            sizeMax: By default is set to huge number to have affect to infinity ie. ignore this field as it's supposed that background field for whole model is set to 'Min'
+            sizeMax: By default is set to huge number to have affect to infinity i.e. ignore this field as it's supposed that background field for whole model is set to 'Min'
             distanceMin: Distance around curve where fine mesh is applied
             distanceMax: ignored field therefore this field is set to huge number 1e22 to exclude sizeMax be aplicable
 
@@ -504,16 +504,20 @@ class BasicMfemMesher:
 
         return -1
 
-    def setSizeOnEdge(self, tags: list[int] | list[tuple[int,int]], max_size: float, out_size: float | None = None) -> None:
+    def setSizeOnEdge(self, objectName: str = "", tags: list[int] | list[tuple[int,int]] = [], max_size: float = 0.0, out_size: float | None = None) -> None:
         """Define the size of the mesh on an edge
 
         Args:
             tags (list[int] | list[tuple[int,int]]): The tags or dimtags of the geometry
             max_size (float): The maximum size (in meters)
+            out_size (float): Size outside (in meters)
         """
         if len(tags) > 0:
             if type(tags[0]) == tuple:
                 tags = [dimtag[1] for dimtag in tags if dimtag[0] == 1] #extract just curves tags
+
+        if len(objectName) > 0:
+            tags.extend([tag for dim, tag in self.getGeometryObjectEdges(objectName)])
 
         constantTag = gmsh.model.mesh.field.add("Constant")
         gmsh.model.mesh.field.set_numbers(constantTag, "CurvesList", tags)
@@ -607,7 +611,16 @@ class BasicMfemMesher:
 
             self.addMeshFieldToList(thresholdFieldTag)
 
-    def setSize(self, objectName: str, size: float, distanceMinForPoint: float = 10.0) -> None:
+    def setSize(self, objectName: str, size: float, distance: float = 10.0) -> None:
+        """
+        Set mesh size for point, curve, surface and volume. For surface and volume it's size in it, for curve it's size of mesh on curve and
+        for point it's size in distance from point.
+        Args:
+            objectName: Internal gemoetry manager object name.
+            size: Mesh size which will be used.
+            distance: For point this is distance from point till where mesh size will be set.
+        Returns: None
+        """
 
         objectDimension = self.getGeometryObjectDimension(objectName)
         if objectDimension == 2:
@@ -615,11 +628,9 @@ class BasicMfemMesher:
         elif objectDimension == 3:
             self.setSizeForVolume(objectName, size)
         elif objectDimension == 1:
-            allEdgesDimtags = self.getGeometryObjectEdges(objectName)
-            self.setSizeOnEdge(objectName, allEdgesDimtags)
+            self.setSizeOnEdge(objectName=objectName, max_size=size)
         elif objectDimension == 0:
-            #TODO: Need to figure out from where to take this minimal distance
-            self.setPointMeshSize(objectName, size, 1e22, distanceMinForPoint, 1e22)
+            self.setPointMeshSize(objectName, size, 1e22, distance, 1e22)
 
     def setBackgroundMinFieldUsingAllDefinedFields(self):
         f_min = gmsh.model.mesh.field.add("Min")
