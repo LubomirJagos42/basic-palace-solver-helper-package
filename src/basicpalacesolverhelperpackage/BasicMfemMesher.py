@@ -929,15 +929,23 @@ class BasicMfemMesher:
         return self._gmshGroupIdList
 
     def addPort(self, name="", direction="-Z", R=50, excitation=False, type="lumped", index=1):
-        self._portList[name] = {
-            "name": name,
-            "direction": direction,
-            "R": R,
-            "excitation": excitation,
-            "type": type,
-            "index": index,
-            "objects": []
-        }
+        if name in self._portList.keys():
+            self._portList[name]["direction"] = direction
+            self._portList[name]["R"] = R
+            self._portList[name]["excitation"] = excitation
+            self._portList[name]["type"] = type
+            self._portList[name]["index"] = index
+        else:
+            self._portList[name] = {
+                "name": name,
+                "direction": direction,
+                "R": R,
+                "excitation": excitation,
+                "type": type,
+                "index": index,
+                "objects": []
+            }
+
         return
 
     def addObjectToPort(self, portName: str, objectName: str) -> None:
@@ -949,14 +957,20 @@ class BasicMfemMesher:
 
         return
 
-    def addLumpedPart(self, name="", Rs:float=0.0, Ls:float=0.0, Cs:float=0.0):
-        self._lumpedPartList[name] = {
-            "name": name,
-            "Rs": Rs,
-            "Ls": Ls,
-            "Cs": Cs,
-            "objects": []
-        }
+    def addLumpedPart(self, name:str="", Rs:float=0.0, Ls:float=0.0, Cs:float=0.0) -> None:
+        if name in self._lumpedPartList.keys():
+            self._lumpedPartList[name]["Rs"] = Rs
+            self._lumpedPartList[name]["Ls"] = Ls
+            self._lumpedPartList[name]["Cs"] = Cs
+        else:
+            self._lumpedPartList[name] = {
+                "name": name,
+                "Rs": Rs,
+                "Ls": Ls,
+                "Cs": Cs,
+                "objects": []
+            }
+
         return
 
     def addObjectToLumpedPart(self, lumpedPartName: str, objectName: str) -> None:
@@ -969,13 +983,18 @@ class BasicMfemMesher:
         return
 
     def addConductivity(self, name="", conductivity:float=0.0, permeability:float=0.0, thickness:float=0.0):
-        self._conductivityList[name] = {
-            "name": name,
-            "Conductivity": conductivity,
-            "Permeability": permeability,
-            "Thickness": thickness,
-            "objects": []
-        }
+        if name in self._conductivityList.keys():
+            self._conductivityList[name]["Conductivity"] = conductivity
+            self._conductivityList[name]["Permeability"] = permeability
+            self._conductivityList[name]["Thickness"] = thickness
+        else:
+            self._conductivityList[name] = {
+                "name": name,
+                "Conductivity": conductivity,
+                "Permeability": permeability,
+                "Thickness": thickness,
+                "objects": []
+            }
         return
 
     def addObjectToConductivity(self, conductivityName: str, objectName: str) -> None:
