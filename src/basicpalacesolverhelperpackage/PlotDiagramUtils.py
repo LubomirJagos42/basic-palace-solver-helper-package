@@ -346,11 +346,11 @@ class PlotDiagramUtils:
             faces.extend([3, simplex[0], simplex[1], simplex[2]])
 
         mesh = pv.PolyData(points, faces)
-        mesh["gain_dBi"]        = gain_dBi
+        mesh["gain_dBi (EXPERIMENTAL, STILL WRONG!)"] = gain_dBi
         mesh["directivity_dBi"] = directivity_dBi
         mesh["directivity_lin"] = directivity
-        mesh["gain_lin"]        = gain
-        mesh["U_W_per_sr"]      = U
+        mesh["gain_lin (EXPERIMENTAL, STILL WRONG!)"] = gain
+        mesh["U_W_per_sr"] = U
 
         mesh.save(outputfile)
         print(f"✓ Saved: {outputfile}")

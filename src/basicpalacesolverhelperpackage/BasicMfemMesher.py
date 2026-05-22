@@ -196,7 +196,7 @@ class BasicMfemMesher:
                 up, down = gmsh.model.getAdjacencies(2, surf_tag)
                 print(f"  Surface {surf_tag} touches volumes: {up}")
 
-                for geometryObject in self.geometryList:
+                for geometryObject in self.geometryObjectList:
                     if hasattr(up, '__len__'):
                         for upItem in up:
                             if (3, upItem) in geometryObject["dimtags"]:
@@ -751,9 +751,9 @@ class BasicMfemMesher:
 
             materialObject = {}
             if "er" in materialAttributes.keys():
-                materialObject["Permeability"] = materialAttributes["er"]
+                materialObject["Permittivity"] = materialAttributes["er"]
             if "ur" in materialAttributes.keys():
-                materialObject["Permittivity"] = materialAttributes["ur"]
+                materialObject["Permeability"] = materialAttributes["ur"]
             if "tand" in materialAttributes.keys():
                 materialObject["LossTan"] = materialAttributes["tand"]
             if "sigma" in materialAttributes.keys():

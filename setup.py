@@ -5,7 +5,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setup(
     name="basicpalacesolverhelperpackage",
-    version="0.0.5",
+    version="0.0.8",
     author="Lubomir Jagos",
     author_email="lubomir.jagos.42@gmail.com",
     description="Mesh creation and plot utilities for Palace EM solver or other FEM solver.",
@@ -25,6 +25,7 @@ setup(
         "gmsh",
         "scipy",
         "pandas",
+        "skrf"
         # "other-package>=1.0.0",
     ],
 )
